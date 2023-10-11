@@ -1,0 +1,3 @@
+[submodule "smarter-device-manager"]
+	path = smarter-device-manager
+	url = https://gitlab.com/arm-research/smarter/smarter-device-manager.git

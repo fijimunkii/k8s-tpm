@@ -1,0 +1,137 @@
+# simple pod test
+# if this works, then we can do a daemonset with securetron nodeselector
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: smarter-device-manager
+  labels:
+    name: smarter-device-manager
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: smarter-device-manager
+  name: smarter-device-manager
+data:
+  conf.yaml: |
+        - devicematch: ^tpm[0-9]*$
+          nummaxdevices: 20
+        - devicematch: ^tpmrm[0-9]*$
+          nummaxdevices: 20
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smarter-device-management
+  namespace: smarter-device-manager
+spec:
+  # Mark this pod as a critical add-on; when enabled, the critical add-on
+  # scheduler reserves resources for critical add-on pods so that they can
+  # be rescheduled after a failure.
+  # See https://kubernetes.io/docs/tasks/administer-cluster/guaranteed-scheduling-critical-addon-pods/
+  #priorityClassName: "system-node-critical"
+  hostNetwork: true
+  dnsPolicy: ClusterFirstWithHostNet
+  hostname: smarter-device-management
+  nodeName: gke-asdf
+  containers:
+  - name: smarter-device-manager
+    image: registry.gitlab.com/arm-research/smarter/smarter-device-manager:v1.20.10
+    imagePullPolicy: IfNotPresent
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      limits:
+        cpu: 1
+        memory: 500Mi
+      requests:
+        cpu: 1
+        memory: 500Mi
+    volumeMounts:
+      - name: device-plugin
+        mountPath: /var/lib/kubelet/device-plugins
+      - name: dev-dir
+        mountPath: /dev
+      - name: sys-dir
+        mountPath: /sys
+      - name: config
+        mountPath: /root/config
+  volumes:
+    - name: device-plugin
+      hostPath:
+        path: /var/lib/kubelet/device-plugins
+    - name: dev-dir
+      hostPath:
+            path: /dev
+    - name: sys-dir
+      hostPath:
+            path: /sys
+    - name: config
+      configMap:
+            name: smarter-device-manager
+  terminationGracePeriodSeconds: 30
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: smarter-device-management-client
+  namespace: smarter-device-manager
+spec:
+  serviceAccountName: default
+  automountServiceAccountToken: false
+  dnsPolicy: ClusterFirstWithHostNet
+  nodeName: gke-asdf
+  restartPolicy: Never
+  containers:
+  - name: smarter-device-management-client
+    imagePullPolicy: IfNotPresent
+    image: ubuntu:22.04
+    command: ["/bin/bash"]
+    env:
+    - name: HTTP_PROXY
+      value: http://proxy.service:3128
+    - name: HTTPS_PROXY
+      value: http://proxy.service:3128
+    - name: http_proxy
+      value: http://proxy.service:3128
+    - name: https_proxy
+      value: http://proxy.service:3128
+    args:
+    - "-c"
+    - |
+      set -eux
+
+      trap "
+        sleep 1h
+      " EXIT
+
+      if ! ls /dev | grep tpm0; then 
+        echo "No tpm available (/dev/tpm0)"
+        exit 1
+      fi
+
+      apt-get update
+      apt-get -y install tpm2-tools
+
+      tpm2_getcap properties-fixed
+      tpm2_getcap properties-variable
+    volumeMounts:
+    - name: secure-storage
+      mountPath: /secure-storage
+    resources:
+      limits:
+        cpu: 1
+        memory: 500Mi
+        smarter-devices/tpm0: 1
+        smarter-devices/tpmrm0: 1
+      requests:
+        cpu: 1
+        memory: 500Mi
+        smarter-devices/tpm0: 1
+        smarter-devices/tpmrm0: 1
+  terminationGracePeriodSeconds: 10
+  volumes:
+  - name: secure-storage
+    emptyDir: {}
